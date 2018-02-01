@@ -14,13 +14,15 @@
 
 package backend
 
-import "net"
+import ("net"
+		//"backend/allocator"
+		)
 
 type Store interface {
 	Lock() error
 	Unlock() error
 	Close() error
-	Reserve(id string, ip net.IP) (bool, error)
+	Reserve(id string, ip net.IP,) (bool, error)
 	LastReservedIP() (net.IP, error)
 	Release(ip net.IP) error
 	ReleaseByID(id string) error

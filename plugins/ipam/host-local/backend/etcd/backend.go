@@ -98,7 +98,7 @@ func NetConfigJson(n *allocator.IPAMConfig) (config []byte, err error) {
 }
 
 // name network etcd(conn)  返回一个string 是一个key，key是name，value是network
-func InitStore(k string, network []byte, etcd *clientv3) (store string, err error) {
+func InitStore(k string, network []byte, etcd *clientv3.Client) (store string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	netstring := string(network[:])
 	resp, err := etcd.Put(ctx, k, netstring)
@@ -111,7 +111,7 @@ func InitStore(k string, network []byte, etcd *clientv3) (store string, err erro
 
 func Lock(n *allocator.IPAMConfig) (*concurrency.Mutex, error) {
 	config := clientv3.Config{
-		Endpoints:   n.EtcdEndpoints,
+		Endpoints:   n.Endpoints,
 		DialTimeout: 5 * time.Second,
 	}
 
@@ -120,33 +120,33 @@ func Lock(n *allocator.IPAMConfig) (*concurrency.Mutex, error) {
 		panic(err)
 	}
 	defer client.Close()
-	opts := &concurrency.sessionOptions{ttl: defaultSessionTTL, ctx: client.Ctx()}
+	opts := &concurrency.sessionOption{ttl: defaultSessionTTL, ctx: client.Ctx()}
 
 	s, err := concurrency.NewSession(client, opts)
 	if err != nil {
 		panic(err)
 	}
 
-	m := concurrency.NewMutex(s, n.EtcdPrefix)
+	m := concurrency.NewMutex(s, n.Prefix)
 
 	return m, nil
 }
 
-func (s *Store) Reserve(id string, ip net.IP) (bool, error) {
-	path := s.Key() + "/" + ip.String()
-	last := s.Key() + "/" + "LastReservedIP"
+func (s *Store) Reserve(id string, ip net.IP, n *allocator.IPAMConfig) (bool, error) {
+	path := s.Key + "/" + ip.String()
+	last := s.Key + "/" + "LastReservedIP"
 	config := clientv3.Config{
-		Endpoints:   endpoints,
+		Endpoints:   n.Endpoints,
 		DialTimeout: 5 * time.Second,
 	}
 
-	etcd, err = clientv3.New(config)
+	etcd, err := clientv3.New(config)
 	if err != nil {
 		panic(err)
 	}
 	defer etcd.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	_, err := etcd.Put(ctx, last, ip.string())
+	_, err = etcd.Put(ctx, last, ip.string())
 	//需要考虑last已存在时覆盖写的问题，相应处理机制还没看懂
 	defer cancel()
 	if err != nil {
@@ -162,46 +162,46 @@ func (s *Store) Reserve(id string, ip net.IP) (bool, error) {
 }
 
 // LastReservedIP returns the last reserved IP if exists
-func (s *Store) LastReservedIP() (net.IP, error) {
-	last := s.Key() + "/" + "LastReservedIP"
+func (s *Store) LastReservedIP(n *allocator.IPAMConfig) (net.IP, error) {
+	last := s.Key + "/" + "LastReservedIP"
 	config := clientv3.Config{
-		Endpoints:   endpoints,
+		Endpoints:   n.Endpoints,
 		DialTimeout: 5 * time.Second,
 	}
 
-	etcd, err = clientv3.New(config)
+	etcd, err := clientv3.New(config)
 	if err != nil {
 		panic(err)
 	}
 	defer etcd.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	cancel()
-	lastip, err := etcd.get(ctx, last)
+	lastip, err := etcd.Get(ctx, last)
 	if err != nil {
 		return nil, err
 	}
 	for _, ev := range lastip.Kvs {
-		ip := ParseIP(ev.Key)
+		ip := net.ParseIP(ev.Key)
 	}
 	//    Kvs不知道是什么 ev 能获取到key和value ev.key是string
 	return ip, nil
 }
 
 func (s *Store) Release(ip net.IP) error {
-	path := s.Key() + "/" + ip.String()
+	path := s.Key + "/" + ip.String()
 	config := clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: 5 * time.Second,
 	}
 
-	etcd, err = clientv3.New(config)
+	etcd, err := clientv3.New(config)
 	if err != nil {
 		panic(err)
 	}
 	defer etcd.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	_, err := etcd.Delete(ctx, path)
+	_, err = etcd.Delete(ctx, path)
 	if err != nil {
 		log.Fatal(err)
 		return err
