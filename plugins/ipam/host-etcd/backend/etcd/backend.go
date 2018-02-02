@@ -100,6 +100,9 @@ func (s *Store) LastReservedIP(rangeID string) (net.IP, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(resp.Kvs) != 1 {
+		return nil, errors.New("Exactly one IP expected to get from last reserved ip")
+	}
 	return net.ParseIP(string(resp.Kvs[0].Value)), nil
 }
 
