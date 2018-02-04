@@ -101,13 +101,12 @@ func (s *Store) LastReservedIP(rangeID string) (net.IP, error) {
 		return nil, err
 	}
 	if len(resp.Kvs) != 1 {
-		return nil, errors.New("Exactly one IP expected to get from last reserved ip")
+		return nil, errors.New("Exactly one IP expected to get from last reserved")
 	}
 	return net.ParseIP(string(resp.Kvs[0].Value)), nil
 }
 
 func (s *Store) Release(ip net.IP) error {
-	// return os.Remove(GetEscapedPath(s.dataDir, ip.String()))
 	_, err := s.kv.Delete(context.TODO(), "/ipam/ips/" + ip.String())
 	return err
 }
@@ -121,9 +120,8 @@ func (s *Store) ReleaseByID(id string) error {
 	}
 	for _, item := range resp.Kvs {
 		if strings.TrimSpace(string(item.Value)) == strings.TrimSpace(id) {
-			_, err = s.kv.Delete(context.TODO(), "ipam/ips/" + strings.TrimSpace(string(item.Key)))
+			_, err = s.kv.Delete(context.TODO(), "/ipam/ips/" + strings.TrimSpace(string(item.Key)))
 			return err
-			break
 		}
 	}
 	return nil
