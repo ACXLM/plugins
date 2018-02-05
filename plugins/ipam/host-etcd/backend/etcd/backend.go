@@ -86,7 +86,7 @@ func (s *Store) Reserve(id string, ip net.IP, rangeID string) (bool, error) {
 		return false, nil
 	}
 	
-	// store the reserved ip in lastIPFile
+	// store the reserved ip in etcd.
 	if _, err := s.kv.Put(context.TODO(), "/ipam/last_reserved_ip" + rangeID,
 		ip.String()); err != nil {
 		return false, err
@@ -100,8 +100,9 @@ func (s *Store) LastReservedIP(rangeID string) (net.IP, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(resp.Kvs) != 1 {
-		return nil, errors.New("Exactly one IP expected to get from last reserved")
+	if len(resp.Kvs) == 0 {
+		// case when initial state there is no this key.
+		return nil, nil
 	}
 	return net.ParseIP(string(resp.Kvs[0].Value)), nil
 }
@@ -120,8 +121,10 @@ func (s *Store) ReleaseByID(id string) error {
 	}
 	for _, item := range resp.Kvs {
 		if strings.TrimSpace(string(item.Value)) == strings.TrimSpace(id) {
-			_, err = s.kv.Delete(context.TODO(), "/ipam/ips/" + strings.TrimSpace(string(item.Key)))
-			return err
+			_, err = s.kv.Delete(context.TODO(), strings.TrimSpace(string(item.Key)))
+			if (err != nil) {
+				return err
+			}
 		}
 	}
 	return nil
