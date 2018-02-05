@@ -6,7 +6,7 @@ it can include a DNS configuration from a `resolv.conf` file on the host.
 ## Overview
 
 host-etcd IPAM plugin allocates ip addresses out of a set of address ranges.
-It stores the state locally on the host filesystem, therefore ensuring uniqueness of IP addresses on a single host.
+It stores the state on a etcd store. therefore ensuring uniqueness of IP addresses over the cluster.
 
 The allocator can allocate multiple ranges, and supports sets of multiple (disjoint) 
 subnets. The allocation strategy is loosely round-robin within each range set.
@@ -48,25 +48,7 @@ This example configuration returns 2 IP addresses.
 			{ "dst": "192.168.0.0/16", "gw": "10.10.5.1" },
 			{ "dst": "3ffe:ffff:0:01ff::1/64" }
 		],
-		"dataDir": "/run/my-orchestrator/container-ipam-state"
-	}
-}
-```
-
-Previous versions of the `host-etcd` allocator did not support the `ranges`
-property, and instead expected a single range on the top level. This is
-deprecated but still supported.
-```json
-{
-  "ipam": {
-		"type": "host-etcd",
-		"subnet": "3ffe:ffff:0:01ff::/64",
-		"rangeStart": "3ffe:ffff:0:01ff::0010",
-		"rangeEnd": "3ffe:ffff:0:01ff::0020",
-		"routes": [
-			{ "dst": "3ffe:ffff:0:01ff::1/64" }
-		],
-		"resolvConf": "/etc/resolv.conf"
+		"endpoints": ["127.0.0.1:2379"]
 	}
 }
 ```
@@ -74,7 +56,7 @@ deprecated but still supported.
 We can test it out on the command-line:
 
 ```bash
-$ echo '{ "cniVersion": "0.3.1", "name": "examplenet", "ipam": { "type": "host-etcd", "ranges": [ [{"subnet": "203.0.113.0/24"}], [{"subnet": "2001:db8:1::/64"}]], "dataDir": "/tmp/cni-example"  } }' | CNI_COMMAND=ADD CNI_CONTAINERID=example CNI_NETNS=/dev/null CNI_IFNAME=dummy0 CNI_PATH=. ./host-etcd
+$ echo '{ "cniVersion": "0.3.1", "name": "examplenet", "ipam": { "type": "host-etcd", "ranges": [ [{"subnet": "203.0.113.0/24"}], [{"subnet": "2001:db8:1::/64"}]], "endpoints": ["127.0.0.1"]  } }' | CNI_COMMAND=ADD CNI_CONTAINERID=example CNI_NETNS=/dev/null CNI_IFNAME=dummy0 CNI_PATH=. ./host-etcd
 
 ```
 
@@ -101,15 +83,12 @@ $ echo '{ "cniVersion": "0.3.1", "name": "examplenet", "ipam": { "type": "host-e
 * `type` (string, required): "host-etcd".
 * `routes` (string, optional): list of routes to add to the container namespace. Each route is a dictionary with "dst" and optional "gw" fields. If "gw" is omitted, value of "gateway" will be used.
 * `resolvConf` (string, optional): Path to a `resolv.conf` on the host to parse and return as the DNS configuration
-* `dataDir` (string, optional): Path to a directory to use for maintaining state, e.g. which IPs have been allocated to which containers
+* `endpoints` ([]string, required): Endpoints of the etcd store use for maintaining state, e.g. which IPs have been allocated to which containers
 * `ranges`, (array, required, nonempty) an array of arrays of range objects:
 	* `subnet` (string, required): CIDR block to allocate out of.
 	* `rangeStart` (string, optional): IP inside of "subnet" from which to start allocating addresses. Defaults to ".2" IP inside of the "subnet" block.
 	* `rangeEnd` (string, optional): IP inside of "subnet" with which to end allocating addresses. Defaults to ".254" IP inside of the "subnet" block for ipv4, ".255" for IPv6
 	* `gateway` (string, optional): IP inside of "subnet" to designate as the gateway. Defaults to ".1" IP inside of the "subnet" block.
-
-Older versions of the `host-etcd` plugin did not support the `ranges` array. Instead,
-all the properties in  the `range` object were top-level. This is still supported but deprecated.
 
 ## Supported arguments
 The following [CNI_ARGS](https://github.com/containernetworking/cni/blob/master/SPEC.md#parameters) are supported:
@@ -129,10 +108,7 @@ If any requested IPs cannot be reserved, either because they are already in use
 or are not part of a specified range, the plugin will return an error.
 
 
-## Files
+## Etcd store
 
-Allocated IP addresses are stored as files in `/var/lib/cni/networks/$NETWORK_NAME`.
-The path can be customized with the `dataDir` option listed above. Environments
-where IPs are released automatically on reboot (e.g. running containers are not
-restored) may wish to specify `/var/run/cni` or another tmpfs mounted directory
-instead.
+Allocated IP addresses are stored as kv pairs in `/ipam/ips/$NETWORK_NAME`.
+The path will be customized later.
