@@ -49,6 +49,7 @@ func New(network string, endPoints []string) (*Store, error) {
 		Endpoints:   endPoints,
 		DialTimeout: 5 * time.Second,
 	})
+	// defer cli.Close()
 
 	if err != nil {
 		return nil, err
@@ -74,8 +75,8 @@ func (s *Store) Unlock() error {
 }
 
 func (s *Store) Close() error {
-	// TODO:
 	return nil
+	// return s.Unlock()
 }
 
 func (s *Store) Reserve(id string, ip net.IP, rangeID string) (bool, error) {
