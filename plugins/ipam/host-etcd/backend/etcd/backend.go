@@ -15,15 +15,20 @@
 package etcd
 
 import (
-	"net"
-	"errors"
-	"time"
 	"context"
+	"errors"
+	"net"
 	"strings"
+	"time"
 
+	"github.com/containernetworking/plugins/plugins/ipam/host-etcd/backend"
 	"github.com/coreos/etcd/clientv3"
 	"github.com/coreos/etcd/clientv3/concurrency"
-	"github.com/containernetworking/plugins/plugins/ipam/host-etcd/backend"
+//	"log"
+
+//	"github.com/coreos/etcd/pkg/transport"
+
+
 )
 
 const lastIPFilePrefix = "last_reserved_ip."
@@ -35,7 +40,7 @@ var defaultDataDir = "/ipam"
 // address. The value of the pair is the container ID.
 type Store struct {
 	mutex *concurrency.Mutex
-	kv clientv3.KV
+	kv    clientv3.KV
 }
 
 // Store implements the Store interface
@@ -45,9 +50,22 @@ func New(network string, endPoints []string) (*Store, error) {
 	if len(endPoints) == 0 {
 		return nil, errors.New("No available endpoints for etcd client")
 	}
+//
+//	tlsInfo := transport.TLSInfo{
+//		CertFile:      "/tmp/certs/ca.pem",
+//		KeyFile:       "/tmp/certs/ca-key.pem",
+//		TrustedCAFile: "/tmp/certs/peer-cert.pem",
+//	}
+
+//	tlsConfig, err := tlsInfo.ClientConfig()
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   endPoints,
 		DialTimeout: 5 * time.Second,
+//		TLS:         tlsConfig,
 	})
 
 	if err != nil {
@@ -61,7 +79,7 @@ func New(network string, endPoints []string) (*Store, error) {
 
 	mutex := concurrency.NewMutex(session, "/ipam/lock")
 	kv := clientv3.NewKV(cli)
-	
+
 	return &Store{mutex, kv}, nil
 }
 
@@ -80,14 +98,14 @@ func (s *Store) Close() error {
 
 func (s *Store) Reserve(id string, ip net.IP, rangeID string) (bool, error) {
 
-	if _, err := s.kv.Put(context.TODO(), "/ipam/ips/" + ip.String(),
+	if _, err := s.kv.Put(context.TODO(), "/ipam/ips/"+ip.String(),
 		strings.TrimSpace(id)); err != nil {
 		// TODO: txn
 		return false, nil
 	}
-	
+
 	// store the reserved ip in etcd.
-	if _, err := s.kv.Put(context.TODO(), "/ipam/last_reserved_ip" + rangeID,
+	if _, err := s.kv.Put(context.TODO(), "/ipam/last_reserved_ip"+rangeID,
 		ip.String()); err != nil {
 		return false, err
 	}
@@ -96,7 +114,7 @@ func (s *Store) Reserve(id string, ip net.IP, rangeID string) (bool, error) {
 
 // LastReservedIP returns the last reserved IP if exists
 func (s *Store) LastReservedIP(rangeID string) (net.IP, error) {
-	resp, err := s.kv.Get(context.TODO(), "/ipam/last_reserved_ip" + rangeID)
+	resp, err := s.kv.Get(context.TODO(), "/ipam/last_reserved_ip"+rangeID)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +126,7 @@ func (s *Store) LastReservedIP(rangeID string) (net.IP, error) {
 }
 
 func (s *Store) Release(ip net.IP) error {
-	_, err := s.kv.Delete(context.TODO(), "/ipam/ips/" + ip.String())
+	_, err := s.kv.Delete(context.TODO(), "/ipam/ips/"+ip.String())
 	return err
 }
 
@@ -122,7 +140,7 @@ func (s *Store) ReleaseByID(id string) error {
 	for _, item := range resp.Kvs {
 		if strings.TrimSpace(string(item.Value)) == strings.TrimSpace(id) {
 			_, err = s.kv.Delete(context.TODO(), strings.TrimSpace(string(item.Key)))
-			if (err != nil) {
+			if err != nil {
 				return err
 			}
 		}
