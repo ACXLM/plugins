@@ -56,7 +56,7 @@ This example configuration returns 2 IP addresses.
 We can test it out on the command-line:
 
 ```bash
-$ echo '{ "cniVersion": "0.3.1", "name": "examplenet", "ipam": { "type": "host-etcd", "ranges": [ [{"subnet": "203.0.113.0/24"}], [{"subnet": "2001:db8:1::/64"}]], "endpoints": ["127.0.0.1"]  } }' | CNI_COMMAND=ADD CNI_CONTAINERID=example CNI_NETNS=/dev/null CNI_IFNAME=dummy0 CNI_PATH=. ./host-etcd
+$ echo '{ "cniVersion": "0.3.1", "name": "examplenet", "ipam": { "type": "host-etcd", "ranges": [ [{"subnet": "203.0.113.0/24"}], [{"subnet": "2001:db8:1::/64"}]], "endpoints": ["127.0.0.1:2379"], "certfile":"/tmp/certs/peer-cert.pem", "keyfile":"/tmp/certs/peer-key.pem", "trustedcafile":"/tmp/certs/ca.pem"  } }' | CNI_COMMAND=ADD CNI_CONTAINERID=example CNI_NETNS=/dev/null CNI_IFNAME=dummy0 CNI_PATH=. ./host-etcd
 
 ```
 

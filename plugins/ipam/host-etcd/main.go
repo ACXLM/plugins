@@ -47,7 +47,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		}
 		result.DNS = *dns
 	}
-	store, err := etcd.New(ipamConf.Name, ipamConf.Endpoints)
+	store, err := etcd.New(ipamConf.Name, ipamConf.Endpoints, ipamConf.CertFile, ipamConf.KeyFile, ipamConf.TrustedCAFile)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 
-	store, err := etcd.New(ipamConf.Name, ipamConf.Endpoints)
+	store, err := etcd.New(ipamConf.Name, ipamConf.Endpoints, ipamConf.CertFile, ipamConf.KeyFile, ipamConf.TrustedCAFile)
 	if err != nil {
 		return err
 	}

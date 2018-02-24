@@ -24,9 +24,9 @@ import (
 	"github.com/containernetworking/plugins/plugins/ipam/host-etcd/backend"
 	"github.com/coreos/etcd/clientv3"
 	"github.com/coreos/etcd/clientv3/concurrency"
-//	"log"
+	"log"
 
-//	"github.com/coreos/etcd/pkg/transport"
+	"github.com/coreos/etcd/pkg/transport"
 
 
 )
@@ -46,26 +46,26 @@ type Store struct {
 // Store implements the Store interface
 var _ backend.Store = &Store{}
 
-func New(network string, endPoints []string) (*Store, error) {
+func New(network string, endPoints []string, CertFile string, KeyFile string, TrustedCAFile string) (*Store, error) {
 	if len(endPoints) == 0 {
 		return nil, errors.New("No available endpoints for etcd client")
 	}
-//
-//	tlsInfo := transport.TLSInfo{
-//		CertFile:      "/tmp/certs/ca.pem",
-//		KeyFile:       "/tmp/certs/ca-key.pem",
-//		TrustedCAFile: "/tmp/certs/peer-cert.pem",
-//	}
 
-//	tlsConfig, err := tlsInfo.ClientConfig()
-//	if err != nil {
-//		log.Fatal(err)
-//	}
+	tlsInfo := transport.TLSInfo{
+		CertFile:      CertFile,
+		KeyFile:       KeyFile,
+		TrustedCAFile: TrustedCAFile,
+	}
+
+	tlsConfig, err := tlsInfo.ClientConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   endPoints,
 		DialTimeout: 5 * time.Second,
-//		TLS:         tlsConfig,
+		TLS:         tlsConfig,
 	})
 	// defer cli.Close()
 

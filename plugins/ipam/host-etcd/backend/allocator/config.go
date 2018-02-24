@@ -51,6 +51,10 @@ type IPAMConfig struct {
 	ResolvConf     string         `json:"resolvConf"`
 	Ranges         []RangeSet     `json:"ranges"`
 	IPArgs         []net.IP       `json:"-"` // Requested IPs from CNI_ARGS and args
+
+	CertFile       string         `json:"certfile,omitempty"`
+	KeyFile        string         `json:"keyfile,omitempty"`
+	TrustedCAFile  string         `json:"trustedcafile,omitempty"`
 }
 
 type IPAMEnvArgs struct {
