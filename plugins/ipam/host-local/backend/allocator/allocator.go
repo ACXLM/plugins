@@ -15,101 +15,195 @@
 package allocator
 
 import (
+	"backend"
 	"fmt"
+	"github.com/containernetworking/cni/pkg/types"
+	"github.com/containernetworking/cni/pkg/types/current"
+	"github.com/containernetworking/plugins/pkg/ip"
 	"log"
 	"net"
 	"os"
-	"strconv"
-
-	"github.com/containernetworking/cni/pkg/types/current"
-	"github.com/containernetworking/plugins/pkg/ip"
-	"github.com/containernetworking/plugins/plugins/ipam/host-local/backend"
 )
 
 type IPAllocator struct {
-	rangeset *RangeSet
-	store    backend.Store
-	rangeID  string // Used for tracking last reserved ip
+	// start is inclusive and may be allocated
+	start net.IP
+	// end is inclusive and may be allocated
+	end   net.IP
+	conf  *IPAMConfig
+	store backend.Store
 }
 
-func NewIPAllocator(s *RangeSet, store backend.Store, id int) *IPAllocator {
-	return &IPAllocator{
-		rangeset: s,
-		store:    store,
-		rangeID:  strconv.Itoa(id),
+func NewIPAllocator(conf *IPAMConfig, store backend.Store) (*IPAllocator, error) {
+	// Can't create an allocator for a network with no addresses, eg
+	// a /32 or /31
+	ones, masklen := conf.Subnet.Mask.Size()
+	if ones > masklen-2 {
+		return nil, fmt.Errorf("Network %v too small to allocate from", conf.Subnet)
 	}
+
+	var (
+		start net.IP
+		end   net.IP
+		err   error
+	)
+	start, end, err = networkRange((*net.IPNet)(&conf.Subnet))
+	if err != nil {
+		return nil, err
+	}
+
+	// skip the .0 address
+	start = ip.NextIP(start)
+
+	if conf.RangeStart != nil {
+		if err := validateRangeIP(conf.RangeStart, (*net.IPNet)(&conf.Subnet), nil, nil); err != nil {
+			return nil, err
+		}
+		start = conf.RangeStart
+	}
+	if conf.RangeEnd != nil {
+		if err := validateRangeIP(conf.RangeEnd, (*net.IPNet)(&conf.Subnet), start, nil); err != nil {
+			return nil, err
+		}
+		end = conf.RangeEnd
+	}
+	return &IPAllocator{start, end, conf, store}, nil
 }
 
-// Get alocates an IP
-func (a *IPAllocator) Get(id string, requestedIP net.IP) (*current.IPConfig, error) {
+func canonicalizeIP(ip net.IP) (net.IP, error) {
+	if ip.To4() != nil {
+		return ip.To4(), nil
+	} else if ip.To16() != nil {
+		return ip.To16(), nil
+	}
+	return nil, fmt.Errorf("IP %s not v4 nor v6", ip)
+}
+
+// Ensures @ip is within @ipnet, and (if given) inclusive of @start and @end
+func validateRangeIP(ip net.IP, ipnet *net.IPNet, start net.IP, end net.IP) error {
+	var err error
+
+	// Make sure we can compare IPv4 addresses directly
+	ip, err = canonicalizeIP(ip)
+	if err != nil {
+		return err
+	}
+
+	if !ipnet.Contains(ip) {
+		return fmt.Errorf("%s not in network: %s", ip, ipnet)
+	}
+
+	if start != nil {
+		start, err = canonicalizeIP(start)
+		if err != nil {
+			return err
+		}
+		if len(ip) != len(start) {
+			return fmt.Errorf("%s %d not same size IP address as start %s %d", ip, len(ip), start, len(start))
+		}
+		for i := 0; i < len(ip); i++ {
+			if ip[i] > start[i] {
+				break
+			} else if ip[i] < start[i] {
+				return fmt.Errorf("%s outside of network %s with start %s", ip, ipnet, start)
+			}
+		}
+	}
+
+	if end != nil {
+		end, err = canonicalizeIP(end)
+		if err != nil {
+			return err
+		}
+		if len(ip) != len(end) {
+			return fmt.Errorf("%s %d not same size IP address as end %s %d", ip, len(ip), end, len(end))
+		}
+		for i := 0; i < len(ip); i++ {
+			if ip[i] < end[i] {
+				break
+			} else if ip[i] > end[i] {
+				return fmt.Errorf("%s outside of network %s with end %s", ip, ipnet, end)
+			}
+		}
+	}
+	return nil
+}
+
+// Returns newly allocated IP along with its config
+func (a *IPAllocator) Get(id string) (*current.IPConfig, []*types.Route, error) {
 	a.store.Lock()
 	defer a.store.Unlock()
 
-	var reservedIP *net.IPNet
-	var gw net.IP
+	gw := a.conf.Gateway
+	if gw == nil {
+		gw = ip.NextIP(a.conf.Subnet.IP)
+	}
+
+	var requestedIP net.IP
+	if a.conf.Args != nil {
+		requestedIP = a.conf.Args.IP
+	}
 
 	if requestedIP != nil {
-		if err := canonicalizeIP(&requestedIP); err != nil {
-			return nil, err
+		if gw != nil && gw.Equal(a.conf.Args.IP) {
+			return nil, nil, fmt.Errorf("requested IP must differ gateway IP")
 		}
 
-		r, err := a.rangeset.RangeFor(requestedIP)
+		subnet := net.IPNet{
+			IP:   a.conf.Subnet.IP,
+			Mask: a.conf.Subnet.Mask,
+		}
+		err := validateRangeIP(requestedIP, &subnet, a.start, a.end)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
-		if requestedIP.Equal(r.Gateway) {
-			return nil, fmt.Errorf("requested ip %s is subnet's gateway", requestedIP.String())
-		}
-
-		reserved, err := a.store.Reserve(id, requestedIP, a.rangeID)
+		reserved, err := a.store.Reserve(id, requestedIP)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if !reserved {
-			return nil, fmt.Errorf("requested IP address %s is not available in range set %s", requestedIP, a.rangeset.String())
-		}
-		reservedIP = &net.IPNet{IP: requestedIP, Mask: r.Subnet.Mask}
-		gw = r.Gateway
 
-	} else {
-		iter, err := a.GetIter()
-		if err != nil {
-			return nil, err
+		if reserved {
+			ipConfig := &current.IPConfig{
+				Version: "4",
+				Address: net.IPNet{IP: requestedIP, Mask: a.conf.Subnet.Mask},
+				Gateway: gw,
+			}
+			routes := convertRoutesToCurrent(a.conf.Routes)
+			return ipConfig, routes, nil
 		}
-		for {
-			reservedIP, gw = iter.Next()
-			if reservedIP == nil {
-				break
-			}
-
-			reserved, err := a.store.Reserve(id, reservedIP.IP, a.rangeID)
-			if err != nil {
-				return nil, err
-			}
-
-			if reserved {
-				break
-			}
-		}
+		return nil, nil, fmt.Errorf("requested IP address %q is not available in network: %s", requestedIP, a.conf.Name)
 	}
 
-	if reservedIP == nil {
-		return nil, fmt.Errorf("no IP addresses available in range set: %s", a.rangeset.String())
-	}
-	version := "4"
-	if reservedIP.IP.To4() == nil {
-		version = "6"
-	}
+	startIP, endIP := a.getSearchRange()
+	for cur := startIP; ; cur = a.nextIP(cur) {
+		// don't allocate gateway IP
+		if gw != nil && cur.Equal(gw) {
+			continue
+		}
 
-	return &current.IPConfig{
-		Version: version,
-		Address: *reservedIP,
-		Gateway: gw,
-	}, nil
+		reserved, err := a.store.Reserve(id, cur)
+		if err != nil {
+			return nil, nil, err
+		}
+		if reserved {
+			ipConfig := &current.IPConfig{
+				Version: "4",
+				Address: net.IPNet{IP: cur, Mask: a.conf.Subnet.Mask},
+				Gateway: gw,
+			}
+			routes := convertRoutesToCurrent(a.conf.Routes)
+			return ipConfig, routes, nil
+		}
+		// break here to complete the loop
+		if cur.Equal(endIP) {
+			break
+		}
+	}
+	return nil, nil, fmt.Errorf("no IP addresses available in network: %s", a.conf.Name)
 }
 
-// Release clears all IPs allocated for the container with given ID
+// Releases all IPs allocated for the container with given ID
 func (a *IPAllocator) Release(id string) error {
 	a.store.Lock()
 	defer a.store.Unlock()
@@ -117,101 +211,66 @@ func (a *IPAllocator) Release(id string) error {
 	return a.store.ReleaseByID(id)
 }
 
-type RangeIter struct {
-	rangeset *RangeSet
-
-	// The current range id
-	rangeIdx int
-
-	// Our current position
-	cur net.IP
-
-	// The IP and range index where we started iterating; if we hit this again, we're done.
-	startIP    net.IP
-	startRange int
-}
-
-// GetIter encapsulates the strategy for this allocator.
-// We use a round-robin strategy, attempting to evenly use the whole set.
-// More specifically, a crash-looping container will not see the same IP until
-// the entire range has been run through.
-// We may wish to consider avoiding recently-released IPs in the future.
-func (a *IPAllocator) GetIter() (*RangeIter, error) {
-	iter := RangeIter{
-		rangeset: a.rangeset,
+// Return the start and end IP addresses of a given subnet, excluding
+// the broadcast address (eg, 192.168.1.255)
+func networkRange(ipnet *net.IPNet) (net.IP, net.IP, error) {
+	if ipnet.IP == nil {
+		return nil, nil, fmt.Errorf("missing field %q in IPAM configuration", "subnet")
+	}
+	ip, err := canonicalizeIP(ipnet.IP)
+	if err != nil {
+		return nil, nil, fmt.Errorf("IP not v4 nor v6")
 	}
 
-	// Round-robin by trying to allocate from the last reserved IP + 1
+	if len(ip) != len(ipnet.Mask) {
+		return nil, nil, fmt.Errorf("IPNet IP and Mask version mismatch")
+	}
+
+	var end net.IP
+	for i := 0; i < len(ip); i++ {
+		end = append(end, ip[i]|^ipnet.Mask[i])
+	}
+
+	// Exclude the broadcast address for IPv4
+	if ip.To4() != nil {
+		end[3]--
+	}
+
+	return ipnet.IP, end, nil
+}
+
+// nextIP returns the next ip of curIP within ipallocator's subnet
+func (a *IPAllocator) nextIP(curIP net.IP) net.IP {
+	if curIP.Equal(a.end) {
+		return a.start
+	}
+	return ip.NextIP(curIP)
+}
+
+// getSearchRange returns the start and end ip based on the last reserved ip
+func (a *IPAllocator) getSearchRange() (net.IP, net.IP) {
+	var startIP net.IP
+	var endIP net.IP
 	startFromLastReservedIP := false
-
-	// We might get a last reserved IP that is wrong if the range indexes changed.
-	// This is not critical, we just lose round-robin this one time.
-	lastReservedIP, err := a.store.LastReservedIP(a.rangeID)
+	lastReservedIP, err := a.store.LastReservedIP()
 	if err != nil && !os.IsNotExist(err) {
-		log.Printf("Error retrieving last reserved ip: %v", err)
+		log.Printf("Error retriving last reserved ip: %v", err)
 	} else if lastReservedIP != nil {
-		startFromLastReservedIP = a.rangeset.Contains(lastReservedIP)
+		subnet := net.IPNet{
+			IP:   a.conf.Subnet.IP,
+			Mask: a.conf.Subnet.Mask,
+		}
+		err := validateRangeIP(lastReservedIP, &subnet, a.start, a.end)
+		if err == nil {
+			startFromLastReservedIP = true
+		}
 	}
-
-	// Find the range in the set with this IP
 	if startFromLastReservedIP {
-		for i, r := range *a.rangeset {
-			if r.Contains(lastReservedIP) {
-				iter.rangeIdx = i
-				iter.startRange = i
-
-				// We advance the cursor on every Next(), so the first call
-				// to next() will return lastReservedIP + 1
-				iter.cur = lastReservedIP
-				break
-			}
-		}
+		startIP = a.nextIP(lastReservedIP)
+		endIP = lastReservedIP
 	} else {
-		iter.rangeIdx = 0
-		iter.startRange = 0
-		iter.startIP = (*a.rangeset)[0].RangeStart
+		startIP = a.start
+		endIP = a.end
 	}
-	return &iter, nil
-}
-
-// Next returns the next IP, its mask, and its gateway. Returns nil
-// if the iterator has been exhausted
-func (i *RangeIter) Next() (*net.IPNet, net.IP) {
-	r := (*i.rangeset)[i.rangeIdx]
-
-	// If this is the first time iterating and we're not starting in the middle
-	// of the range, then start at rangeStart, which is inclusive
-	if i.cur == nil {
-		i.cur = r.RangeStart
-		i.startIP = i.cur
-		if i.cur.Equal(r.Gateway) {
-			return i.Next()
-		}
-		return &net.IPNet{IP: i.cur, Mask: r.Subnet.Mask}, r.Gateway
-	}
-
-	// If we've reached the end of this range, we need to advance the range
-	// RangeEnd is inclusive as well
-	if i.cur.Equal(r.RangeEnd) {
-		i.rangeIdx += 1
-		i.rangeIdx %= len(*i.rangeset)
-		r = (*i.rangeset)[i.rangeIdx]
-
-		i.cur = r.RangeStart
-	} else {
-		i.cur = ip.NextIP(i.cur)
-	}
-
-	if i.startIP == nil {
-		i.startIP = i.cur
-	} else if i.rangeIdx == i.startRange && i.cur.Equal(i.startIP) {
-		// IF we've looped back to where we started, give up
-		return nil, nil
-	}
-
-	if i.cur.Equal(r.Gateway) {
-		return i.Next()
-	}
-
-	return &net.IPNet{IP: i.cur, Mask: r.Subnet.Mask}, r.Gateway
+	return startIP, endIP
 }
